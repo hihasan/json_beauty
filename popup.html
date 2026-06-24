@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>JSON Beauty</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+
+<!-- ── SCREEN 1: INPUT ── -->
+<div id="screen-input" class="screen active">
+  <div class="header">
+    <div class="logo">
+      <div class="logo-icon">✦</div>
+      JSON Beauty
+    </div>
+    <div class="header-actions">
+      <button class="btn-icon btn-theme" title="Toggle theme">☀</button>
+      <button class="btn-icon" id="btn-open-history" title="History">🕓</button>
+    </div>
+  </div>
+
+  <div class="input-body">
+    <div>
+      <div class="field-label">Label (optional)</div>
+      <input id="title-input" type="text" placeholder="e.g. API Response · User Object" />
+    </div>
+    <div style="flex:1">
+      <div class="field-label">Paste JSON</div>
+      <textarea id="json-input" placeholder='{ "paste": "your JSON here" }'></textarea>
+    </div>
+  </div>
+
+  <div class="input-footer">
+    <p class="footer-copy">
+      &copy; All rights reserved <a href="https://hihasan.xyz" target="_blank" rel="noopener">hihasan</a>
+    </p>
+    <div class="footer-actions">
+      <span class="error-msg" id="error-msg">⚠ Invalid JSON</span>
+      <button class="btn btn-ghost" id="btn-clear">Clear</button>
+      <button class="btn btn-primary" id="btn-format">Format →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── SCREEN 2: VIEWER ── -->
+<div id="screen-viewer" class="screen">
+  <div class="viewer-header">
+    <button class="btn-icon" id="btn-back-to-input" title="Back">←</button>
+    <div>
+      <div class="viewer-title" id="viewer-title">Untitled</div>
+      <div class="viewer-meta" id="viewer-meta"></div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-icon btn-theme" title="Toggle theme">☀</button>
+      <button class="btn-icon" id="btn-copy" title="Copy formatted JSON">⎘</button>
+      <button class="btn-icon" id="btn-open-history2" title="History">🕓</button>
+    </div>
+  </div>
+  <div id="json-viewer"></div>
+</div>
+
+<!-- ── SCREEN 3: HISTORY ── -->
+<div id="screen-history" class="screen">
+  <div class="header">
+    <button class="btn-icon" id="btn-back-from-history" title="Back">←</button>
+    <div class="logo" style="font-size:14px">History</div>
+    <div class="header-actions">
+      <button class="btn-icon btn-theme" title="Toggle theme">☀</button>
+      <button class="btn btn-danger" id="btn-clear-all" style="font-size:11px">Clear all</button>
+    </div>
+  </div>
+  <div class="history-toolbar">
+    <input id="history-search" type="text" placeholder="Search by name…" />
+    <div class="date-filters">
+      <button class="date-filter-btn active" data-filter="all">All</button>
+      <button class="date-filter-btn" data-filter="today">Today</button>
+      <button class="date-filter-btn" data-filter="yesterday">Yesterday</button>
+      <button class="date-filter-btn" data-filter="week">This week</button>
+    </div>
+  </div>
+  <div class="history-body" id="history-list"></div>
+</div>
+
+<div id="toast"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>
