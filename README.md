@@ -18,9 +18,13 @@
 
 JSON Beauty is a minimal Chrome extension that turns raw JSON into a readable, collapsible tree — no tab-switching, no external tools, no internet required. Paste your payload, hit **Format**, and get a colour-coded viewer with full collapse/expand support. Every entry is saved locally so you can revisit past responses without re-pasting.
 
-![JSON Beauty screenshot](images/Screenshot%202026-06-24%20232726.png)
-![JSON Beauty day theme](images/day_screenshoot.png)
-![JSON Beauty night theme](images/night_screenShoot.png)
+<table>
+  <tr>
+    <td><img src="images/Screenshot%202026-06-24%20232726.png" alt="JSON Beauty screenshot" /></td>
+    <td><img src="images/day_screenshoot.png" alt="JSON Beauty day theme" /></td>
+    <td><img src="images/night_screenShoot.png" alt="JSON Beauty night theme" /></td>
+  </tr>
+</table>
 
 ---
 
