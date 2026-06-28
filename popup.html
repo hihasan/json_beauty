@@ -39,6 +39,7 @@
     <div class="footer-actions">
       <span class="error-msg" id="error-msg">⚠ Invalid JSON</span>
       <button class="btn btn-ghost" id="btn-clear">Clear</button>
+      <button class="btn btn-ghost" id="btn-to-kotlin">Convert To Model →</button>
       <button class="btn btn-primary" id="btn-format">Format →</button>
     </div>
   </div>
@@ -54,11 +55,70 @@
     </div>
     <div class="header-actions">
       <button class="btn-icon btn-theme" title="Toggle theme">☀</button>
+      <button class="btn-icon" id="btn-kotlin" title="Convert to Kotlin">Kt</button>
       <button class="btn-icon" id="btn-copy" title="Copy formatted JSON">⎘</button>
       <button class="btn-icon" id="btn-open-history2" title="History">🕓</button>
     </div>
   </div>
+  <div class="viewer-search-bar">
+    <input id="viewer-search-input" type="text" placeholder="Search keys & values…" autocomplete="off" />
+    <span id="viewer-search-count" class="search-count"></span>
+    <button class="btn-icon" id="btn-search-prev" title="Previous (Shift+Enter)">↑</button>
+    <button class="btn-icon" id="btn-search-next" title="Next (Enter)">↓</button>
+  </div>
   <div id="json-viewer"></div>
+</div>
+
+<!-- ── SCREEN 4: KOTLIN ── -->
+<div id="screen-kotlin" class="screen">
+  <div class="viewer-header">
+    <button class="btn-icon" id="btn-back-from-kotlin" title="Back">←</button>
+    <div>
+      <div class="viewer-title" id="convert-screen-title">Kotlin</div>
+      <div class="viewer-meta" id="kotlin-meta"></div>
+    </div>
+    <div class="header-actions">
+      <button class="btn-icon btn-theme" title="Toggle theme">☀</button>
+      <button class="btn-icon" id="btn-copy-kotlin" title="Copy Kotlin">⎘</button>
+      <button class="btn-icon" id="btn-download-kotlin" title="Download .kt file">⬇</button>
+    </div>
+  </div>
+  <div class="convert-lang-bar">
+    <button class="convert-lang-btn active" data-lang="kotlin">Kotlin</button>
+    <button class="convert-lang-btn" data-lang="java">Java</button>
+    <button class="convert-lang-btn" data-lang="swift">Swift</button>
+    <button class="convert-lang-btn" data-lang="flutter">Flutter</button>
+  </div>
+  <div class="kotlin-options-bar" id="opts-kotlin">
+    <input id="kotlin-root-name" type="text" placeholder="Root class name…" autocomplete="off" />
+    <input id="kotlin-package-name" type="text" placeholder="Package (e.g. com.example)" autocomplete="off" style="max-width:155px" />
+    <button class="kotlin-toggle active" id="kt-toggle-serial">@Serial</button>
+    <button class="kotlin-toggle" id="kt-toggle-nullable">Nullable</button>
+    <button class="kotlin-toggle" id="kt-toggle-var">var</button>
+  </div>
+  <div class="kotlin-options-bar" id="opts-java" style="display:none">
+    <input id="java-root-name" type="text" placeholder="Root class name…" autocomplete="off" />
+    <input id="java-package-name" type="text" placeholder="Package (e.g. com.example)" autocomplete="off" style="max-width:155px" />
+    <button class="kotlin-toggle active" data-ann="jackson">Jackson</button>
+    <button class="kotlin-toggle" data-ann="gson">Gson</button>
+    <button class="kotlin-toggle" data-ann="none">None</button>
+    <button class="kotlin-toggle active" id="jv-toggle-getters">Getters</button>
+  </div>
+  <div class="kotlin-options-bar" id="opts-swift" style="display:none">
+    <input id="swift-root-name" type="text" placeholder="Root class name…" autocomplete="off" />
+    <input id="swift-package-name" type="text" placeholder="Module (e.g. com.example)" autocomplete="off" style="max-width:155px" />
+    <button class="kotlin-toggle active" id="sw-toggle-codable">Codable</button>
+    <button class="kotlin-toggle" id="sw-toggle-class">class</button>
+    <button class="kotlin-toggle" id="sw-toggle-var">var</button>
+  </div>
+  <div class="kotlin-options-bar" id="opts-flutter" style="display:none">
+    <input id="flutter-root-name" type="text" placeholder="Root class name…" autocomplete="off" />
+    <input id="flutter-package-name" type="text" placeholder="Package (e.g. com.example)" autocomplete="off" style="max-width:155px" />
+    <button class="kotlin-toggle active" id="fl-toggle-json">fromJson</button>
+    <button class="kotlin-toggle active" id="fl-toggle-final">final</button>
+    <button class="kotlin-toggle" id="fl-toggle-nullable">Nullable</button>
+  </div>
+  <div id="kotlin-output"></div>
 </div>
 
 <!-- ── SCREEN 3: HISTORY ── -->

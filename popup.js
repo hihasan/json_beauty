@@ -227,6 +227,632 @@ function repairJSON(str) {
   return fixed;
 }
 
+/* ── KOTLIN CONVERTER ────────────────────────────────────────────────── */
+function toCamelCase(key) {
+  return key
+    .replace(/[-_\s]+(.)/g, (_, c) => c.toUpperCase())
+    .replace(/^(.)/, c => c.toLowerCase());
+}
+
+function toPascalCase(key) {
+  const s = toCamelCase(key);
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function singularize(key) {
+  if (key.endsWith('ies')) return key.slice(0, -3) + 'y';
+  if (key.endsWith('ses') || key.endsWith('xes') || key.endsWith('zes')) return key.slice(0, -2);
+  if (key.length > 1 && key.endsWith('s')) return key.slice(0, -1);
+  return key + 'Item';
+}
+
+function jsonToKotlin(value, rootName, opts) {
+  const { serializable, allNullable, useVar } = opts;
+  const classes = new Map();
+  const usedNames = new Set();
+
+  function uniqueName(name) {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    let i = 2;
+    while (usedNames.has(name + i)) i++;
+    usedNames.add(name + i);
+    return name + i;
+  }
+
+  function mergeObjects(arr) {
+    const merged = {};
+    for (const obj of arr) {
+      for (const [k, v] of Object.entries(obj)) {
+        if (!(k in merged) || merged[k] === null) merged[k] = v;
+      }
+    }
+    return merged;
+  }
+
+  function inferArrayItemType(arr, key) {
+    const types = arr.map(item => {
+      if (item === null) return 'null';
+      if (typeof item === 'boolean') return 'Boolean';
+      if (typeof item === 'number') return Number.isInteger(item) ? 'Int' : 'Double';
+      if (typeof item === 'string') return 'String';
+      if (Array.isArray(item)) return 'List';
+      if (typeof item === 'object') return 'object';
+      return 'Any';
+    });
+    const unique = [...new Set(types)];
+    if (unique.length === 1) {
+      if (unique[0] === 'object') {
+        const objs = arr.filter(x => x && typeof x === 'object' && !Array.isArray(x));
+        return inferClass(mergeObjects(objs), toPascalCase(singularize(key)));
+      }
+      if (unique[0] === 'null') return 'Any?';
+      return unique[0];
+    }
+    if (unique.every(t => ['Int', 'Long'].includes(t))) return 'Long';
+    if (unique.every(t => ['Int', 'Long', 'Double'].includes(t))) return 'Double';
+    const nonNull = unique.filter(t => t !== 'null');
+    if (nonNull.length === 1 && !['object', 'List'].includes(nonNull[0])) return nonNull[0] + '?';
+    return 'Any';
+  }
+
+  function inferType(val, key) {
+    if (val === null) return { type: 'Any', nullable: true };
+    if (typeof val === 'boolean') return { type: 'Boolean', nullable: false };
+    if (typeof val === 'number') {
+      return { type: Number.isInteger(val) && Math.abs(val) <= 2147483647 ? 'Int' : Number.isInteger(val) ? 'Long' : 'Double', nullable: false };
+    }
+    if (typeof val === 'string') return { type: 'String', nullable: false };
+    if (Array.isArray(val)) {
+      if (!val.length) return { type: 'List<Any>', nullable: false };
+      return { type: `List<${inferArrayItemType(val, key)}>`, nullable: false };
+    }
+    if (typeof val === 'object') return { type: inferClass(val, toPascalCase(key)), nullable: false };
+    return { type: 'Any', nullable: false };
+  }
+
+  function inferClass(obj, className) {
+    const name = uniqueName(className);
+    const fields = [];
+    classes.set(name, fields);
+    for (const [key, val] of Object.entries(obj)) {
+      const camelName = toCamelCase(key);
+      const { type, nullable } = inferType(val, key);
+      fields.push({ name: camelName, type, nullable: allNullable || nullable, originalKey: key, needsAnnotation: camelName !== key });
+    }
+    return name;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    inferClass(value, rootName);
+  } else {
+    const { type } = inferType(value, rootName);
+    classes.set(uniqueName(rootName), [{ name: 'value', type, nullable: allNullable, originalKey: 'value', needsAnnotation: false }]);
+  }
+
+  const needsSerialName = serializable && [...classes.values()].some(f => f.some(x => x.needsAnnotation));
+  const { packageName } = opts;
+  const lines = [];
+  if (packageName) { lines.push(`package ${packageName}`); lines.push(''); }
+  if (serializable) {
+    lines.push('import kotlinx.serialization.Serializable');
+    if (needsSerialName) lines.push('import kotlinx.serialization.SerialName');
+    lines.push('');
+  }
+
+  let first = true;
+  for (const [name, fields] of classes) {
+    if (!first) lines.push('');
+    first = false;
+    if (serializable) lines.push('@Serializable');
+    lines.push(`data class ${name}(`);
+    fields.forEach((f, i) => {
+      if (serializable && f.needsAnnotation) lines.push(`    @SerialName("${f.originalKey}")`);
+      const comma = i < fields.length - 1 ? ',' : '';
+      lines.push(`    ${useVar ? 'var' : 'val'} ${f.name}: ${f.type}${f.nullable ? '?' : ''}${comma}`);
+    });
+    lines.push(')');
+  }
+  return lines.join('\n');
+}
+
+function renderCode(code, kwRe, typeRe, strRe = /"[^"]*"/g) {
+  const pre = document.createElement('pre');
+  const annRe = /@\w+/g;
+
+  for (const [li, line] of code.split('\n').entries()) {
+    if (li > 0) pre.appendChild(document.createTextNode('\n'));
+    const tokens = [];
+    const mark = (re, cls) => { re.lastIndex = 0; let m; while ((m = re.exec(line)) !== null) tokens.push({ s: m.index, e: m.index + m[0].length, cls }); };
+    mark(strRe, 'kt-str');
+    mark(annRe, 'kt-ann');
+    mark(kwRe,  'kt-kw');
+    mark(typeRe,'kt-type');
+    tokens.sort((a, b) => a.s - b.s);
+    const final = []; let pos = 0;
+    for (const t of tokens) { if (t.s < pos) continue; final.push(t); pos = t.e; }
+    let cur = 0;
+    for (const t of final) {
+      if (t.s > cur) pre.appendChild(document.createTextNode(line.slice(cur, t.s)));
+      const span = document.createElement('span');
+      span.className = t.cls; span.textContent = line.slice(t.s, t.e);
+      pre.appendChild(span); cur = t.e;
+    }
+    if (cur < line.length) pre.appendChild(document.createTextNode(line.slice(cur)));
+  }
+  return pre;
+}
+
+function renderKotlin(code) {
+  return renderCode(code,
+    /\b(data|class|val|var|import)\b/g,
+    /\b(String|Int|Long|Double|Float|Boolean|List|Map|Set|Any)\b/g);
+}
+
+function renderJava(code) {
+  return renderCode(code,
+    /\b(public|private|class|import|package|void|return|this|new|final)\b/g,
+    /\b(String|Integer|int|Long|long|Double|double|Boolean|boolean|Object|List|Map|Set)\b/g);
+}
+
+function renderSwift(code) {
+  return renderCode(code,
+    /\b(import|struct|class|let|var|enum|case|func|return|self|init|guard|if|else)\b/g,
+    /\b(String|Int|Double|Float|Bool|Any|Optional)\b/g);
+}
+
+function renderFlutter(code) {
+  return renderCode(code,
+    /\b(import|class|final|var|factory|return|required|this|void|const)\b/g,
+    /\b(String|int|double|bool|dynamic|Map|List|num)\b/g,
+    /'[^'\n]*'|"[^"\n]*"/g);
+}
+
+function jsonToSwift(value, rootName, opts) {
+  const { useCodable, useClass, useVar, allNullable } = opts;
+  const classes = new Map();
+  const usedNames = new Set();
+
+  function uniqueName(name) {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    let i = 2; while (usedNames.has(name + i)) i++;
+    usedNames.add(name + i); return name + i;
+  }
+
+  function mergeObjects(arr) {
+    const merged = {};
+    for (const obj of arr) for (const [k, v] of Object.entries(obj)) if (!(k in merged) || merged[k] === null) merged[k] = v;
+    return merged;
+  }
+
+  function inferArrayItemType(arr, key) {
+    const types = arr.map(item => {
+      if (item === null) return 'null';
+      if (typeof item === 'boolean') return 'Bool';
+      if (typeof item === 'number') return Number.isInteger(item) ? 'Int' : 'Double';
+      if (typeof item === 'string') return 'String';
+      if (typeof item === 'object' && !Array.isArray(item)) return 'object';
+      return 'Any';
+    });
+    const unique = [...new Set(types)];
+    if (unique.length === 1) {
+      if (unique[0] === 'object') return inferClass(mergeObjects(arr.filter(x => x && typeof x === 'object' && !Array.isArray(x))), toPascalCase(singularize(key)));
+      if (unique[0] === 'null') return 'Any?';
+      return unique[0];
+    }
+    if (unique.every(t => ['Int', 'Double'].includes(t))) return 'Double';
+    return 'Any';
+  }
+
+  function inferType(val, key) {
+    if (val === null) return { type: 'Any', nullable: true };
+    if (typeof val === 'boolean') return { type: 'Bool', nullable: false };
+    if (typeof val === 'number') return { type: Number.isInteger(val) ? 'Int' : 'Double', nullable: false };
+    if (typeof val === 'string') return { type: 'String', nullable: false };
+    if (Array.isArray(val)) return { type: val.length ? `[${inferArrayItemType(val, key)}]` : '[Any]', nullable: false };
+    if (typeof val === 'object') return { type: inferClass(val, toPascalCase(key)), nullable: false };
+    return { type: 'Any', nullable: false };
+  }
+
+  function inferClass(obj, className) {
+    const name = uniqueName(className);
+    const fields = [];
+    classes.set(name, fields);
+    for (const [key, val] of Object.entries(obj)) {
+      const camelName = toCamelCase(key);
+      const { type, nullable } = inferType(val, key);
+      fields.push({ name: camelName, type, nullable: allNullable || nullable, originalKey: key, needsCodingKey: camelName !== key });
+    }
+    return name;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    inferClass(value, rootName);
+  } else {
+    const { type } = inferType(value, rootName);
+    classes.set(uniqueName(rootName), [{ name: 'value', type, nullable: allNullable, originalKey: 'value', needsCodingKey: false }]);
+  }
+
+  const { packageName } = opts;
+  const kw = useClass ? 'class' : 'struct';
+  const propKw = useVar ? 'var' : 'let';
+  const lines = [];
+  if (packageName) { lines.push(`// ${packageName}`); lines.push(''); }
+  if (useCodable) { lines.push('import Foundation'); lines.push(''); }
+
+  let first = true;
+  for (const [name, fields] of classes) {
+    if (!first) lines.push('');
+    first = false;
+    lines.push(`${kw} ${name}${useCodable ? ': Codable' : ''} {`);
+    for (const f of fields) lines.push(`    ${propKw} ${f.name}: ${f.type}${f.nullable ? '?' : ''}`);
+    const hasDiffKey = fields.some(f => f.needsCodingKey);
+    if (useCodable && hasDiffKey) {
+      lines.push('');
+      lines.push('    enum CodingKeys: String, CodingKey {');
+      for (const f of fields) lines.push(f.needsCodingKey ? `        case ${f.name} = "${f.originalKey}"` : `        case ${f.name}`);
+      lines.push('    }');
+    }
+    lines.push('}');
+  }
+  return lines.join('\n');
+}
+
+function jsonToFlutter(value, rootName, opts) {
+  const { includeJson, useFinal, allNullable, packageName } = opts;
+  const classes = new Map();
+  const usedNames = new Set();
+
+  function uniqueName(name) {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    let i = 2; while (usedNames.has(name + i)) i++;
+    usedNames.add(name + i); return name + i;
+  }
+
+  function mergeObjects(arr) {
+    const merged = {};
+    for (const obj of arr) for (const [k, v] of Object.entries(obj)) if (!(k in merged) || merged[k] === null) merged[k] = v;
+    return merged;
+  }
+
+  function inferArrayItem(arr, key) {
+    const types = arr.map(item => {
+      if (item === null) return 'null';
+      if (typeof item === 'boolean') return 'bool';
+      if (typeof item === 'number') return Number.isInteger(item) ? 'int' : 'double';
+      if (typeof item === 'string') return 'String';
+      if (typeof item === 'object' && !Array.isArray(item)) return 'object';
+      return 'dynamic';
+    });
+    const unique = [...new Set(types)];
+    if (unique.length === 1) {
+      if (unique[0] === 'object') {
+        const cn = inferClass(mergeObjects(arr.filter(x => x && typeof x === 'object' && !Array.isArray(x))), toPascalCase(singularize(key)));
+        return { itemType: cn, itemIsClass: true };
+      }
+      if (unique[0] === 'null') return { itemType: 'dynamic', itemIsClass: false };
+      return { itemType: unique[0], itemIsClass: false };
+    }
+    if (unique.every(t => ['int', 'double'].includes(t))) return { itemType: 'double', itemIsClass: false };
+    return { itemType: 'dynamic', itemIsClass: false };
+  }
+
+  function inferType(val, key) {
+    if (val === null) return { type: 'dynamic', isClass: false, isList: false };
+    if (typeof val === 'boolean') return { type: 'bool', isClass: false, isList: false };
+    if (typeof val === 'number') return { type: Number.isInteger(val) ? 'int' : 'double', isClass: false, isList: false };
+    if (typeof val === 'string') return { type: 'String', isClass: false, isList: false };
+    if (Array.isArray(val)) {
+      if (!val.length) return { type: 'List<dynamic>', isClass: false, isList: true, itemIsClass: false, itemType: 'dynamic' };
+      const { itemType, itemIsClass } = inferArrayItem(val, key);
+      return { type: `List<${itemType}>`, isClass: false, isList: true, itemIsClass, itemType };
+    }
+    if (typeof val === 'object') return { type: inferClass(val, toPascalCase(key)), isClass: true, isList: false };
+    return { type: 'dynamic', isClass: false, isList: false };
+  }
+
+  function inferClass(obj, className) {
+    const name = uniqueName(className);
+    const fields = [];
+    classes.set(name, fields);
+    for (const [key, val] of Object.entries(obj)) {
+      const meta = inferType(val, key);
+      fields.push({ name: toCamelCase(key), originalKey: key, nullable: allNullable, ...meta });
+    }
+    return name;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    inferClass(value, rootName);
+  } else {
+    const meta = inferType(value, rootName);
+    classes.set(uniqueName(rootName), [{ name: 'value', originalKey: 'value', nullable: allNullable, ...meta }]);
+  }
+
+  const lines = [];
+  if (packageName) { lines.push(`// ${packageName}`); lines.push(''); }
+  let first = true;
+  for (const [name, fields] of classes) {
+    if (!first) lines.push('');
+    first = false;
+    lines.push(`class ${name} {`);
+    for (const f of fields) {
+      lines.push(`  ${useFinal ? 'final ' : ''}${f.type}${f.nullable ? '?' : ''} ${f.name};`);
+    }
+    lines.push('');
+    lines.push(`  ${name}({`);
+    for (const f of fields) lines.push(`    required this.${f.name},`);
+    lines.push('  });');
+
+    if (includeJson) {
+      lines.push('');
+      lines.push(`  factory ${name}.fromJson(Map<String, dynamic> json) => ${name}(`);
+      for (const f of fields) {
+        let rval;
+        if (f.isClass) rval = `${f.type}.fromJson(json['${f.originalKey}'])`;
+        else if (f.isList && f.itemIsClass) rval = `(json['${f.originalKey}'] as List).map((e) => ${f.itemType}.fromJson(e)).toList()`;
+        else if (f.isList) rval = `List<${f.itemType}>.from(json['${f.originalKey}'])`;
+        else rval = `json['${f.originalKey}']`;
+        lines.push(`        ${f.name}: ${rval},`);
+      }
+      lines.push('      );');
+      lines.push('');
+      lines.push('  Map<String, dynamic> toJson() => {');
+      for (const f of fields) {
+        const rval = f.isClass ? `${f.name}.toJson()` : (f.isList && f.itemIsClass) ? `${f.name}.map((e) => e.toJson()).toList()` : f.name;
+        lines.push(`        '${f.originalKey}': ${rval},`);
+      }
+      lines.push('      };');
+    }
+    lines.push('}');
+  }
+  return lines.join('\n');
+}
+
+function jsonToJava(value, rootName, opts) {
+  const { packageName, annotationStyle, includeGetters } = opts;
+  const classes = new Map();
+  const usedNames = new Set();
+
+  function uniqueName(name) {
+    if (!usedNames.has(name)) { usedNames.add(name); return name; }
+    let i = 2; while (usedNames.has(name + i)) i++;
+    usedNames.add(name + i); return name + i;
+  }
+
+  function mergeObjects(arr) {
+    const merged = {};
+    for (const obj of arr) for (const [k, v] of Object.entries(obj)) if (!(k in merged) || merged[k] === null) merged[k] = v;
+    return merged;
+  }
+
+  function inferArrayItemType(arr, key) {
+    const types = arr.map(item => {
+      if (item === null) return 'null';
+      if (typeof item === 'boolean') return 'Boolean';
+      if (typeof item === 'number') return Number.isInteger(item) ? 'Integer' : 'Double';
+      if (typeof item === 'string') return 'String';
+      if (Array.isArray(item)) return 'List';
+      if (typeof item === 'object') return 'object';
+      return 'Object';
+    });
+    const unique = [...new Set(types)];
+    if (unique.length === 1) {
+      if (unique[0] === 'object') return inferClass(mergeObjects(arr.filter(x => x && typeof x === 'object' && !Array.isArray(x))), toPascalCase(singularize(key)));
+      if (unique[0] === 'null') return 'Object';
+      return unique[0];
+    }
+    if (unique.every(t => ['Integer', 'Long'].includes(t))) return 'Long';
+    if (unique.every(t => ['Integer', 'Long', 'Double'].includes(t))) return 'Double';
+    return 'Object';
+  }
+
+  function inferType(val, key) {
+    if (val === null) return { type: 'Object' };
+    if (typeof val === 'boolean') return { type: 'Boolean' };
+    if (typeof val === 'number') return { type: Number.isInteger(val) && Math.abs(val) <= 2147483647 ? 'Integer' : Number.isInteger(val) ? 'Long' : 'Double' };
+    if (typeof val === 'string') return { type: 'String' };
+    if (Array.isArray(val)) return { type: val.length ? `List<${inferArrayItemType(val, key)}>` : 'List<Object>' };
+    if (typeof val === 'object') return { type: inferClass(val, toPascalCase(key)) };
+    return { type: 'Object' };
+  }
+
+  function inferClass(obj, className) {
+    const name = uniqueName(className);
+    const fields = [];
+    classes.set(name, fields);
+    for (const [key, val] of Object.entries(obj)) {
+      const camelName = toCamelCase(key);
+      const { type } = inferType(val, key);
+      fields.push({ name: camelName, type, originalKey: key });
+    }
+    return name;
+  }
+
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    inferClass(value, rootName);
+  } else {
+    const { type } = inferType(value, rootName);
+    classes.set(uniqueName(rootName), [{ name: 'value', type, originalKey: 'value' }]);
+  }
+
+  const allFields = [...classes.values()].flat();
+  const needsList = allFields.some(f => f.type.startsWith('List'));
+  const lines = [];
+
+  if (packageName) { lines.push(`package ${packageName};`); lines.push(''); }
+
+  const imports = [];
+  if (annotationStyle === 'jackson') imports.push('com.fasterxml.jackson.annotation.JsonProperty');
+  if (annotationStyle === 'gson')    imports.push('com.google.gson.annotations.SerializedName');
+  if (needsList) imports.push('java.util.List');
+  if (imports.length) { imports.sort().forEach(i => lines.push(`import ${i};`)); lines.push(''); }
+
+  let first = true;
+  for (const [name, fields] of classes) {
+    if (!first) lines.push('');
+    first = false;
+    lines.push(`public class ${name} {`);
+    lines.push('');
+    for (const f of fields) {
+      if (annotationStyle === 'jackson') lines.push(`    @JsonProperty("${f.originalKey}")`);
+      if (annotationStyle === 'gson')    lines.push(`    @SerializedName("${f.originalKey}")`);
+      lines.push(`    private ${f.type} ${f.name};`);
+    }
+    if (includeGetters && fields.length) {
+      for (const f of fields) {
+        const cap = f.name.charAt(0).toUpperCase() + f.name.slice(1);
+        const prefix = f.type === 'boolean' ? 'is' : 'get';
+        lines.push('');
+        lines.push(`    public ${f.type} ${prefix}${cap}() { return ${f.name}; }`);
+        lines.push(`    public void set${cap}(${f.type} ${f.name}) { this.${f.name} = ${f.name}; }`);
+      }
+    }
+    lines.push('}');
+  }
+  return lines.join('\n');
+}
+
+let _kotlinParsed = null;
+let _kotlinTitleHint = '';
+let _convertLang = 'kotlin';
+
+function titleToClassName(hint) {
+  const words = (hint || '').replace(/[^a-zA-Z0-9]+/g, ' ').trim().split(/\s+/).filter(w => /[a-zA-Z]/.test(w));
+  return words.length ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join('').slice(0, 32) : 'Root';
+}
+
+function reRenderConvert() {
+  const out = document.getElementById('kotlin-output');
+  out.innerHTML = '';
+  let code, filename;
+
+  if (_convertLang === 'kotlin') {
+    const rootName     = document.getElementById('kotlin-root-name').value.trim() || 'Root';
+    const packageName  = document.getElementById('kotlin-package-name').value.trim();
+    const serializable = document.getElementById('kt-toggle-serial').classList.contains('active');
+    const allNullable  = document.getElementById('kt-toggle-nullable').classList.contains('active');
+    const useVar       = document.getElementById('kt-toggle-var').classList.contains('active');
+    code = jsonToKotlin(_kotlinParsed, rootName, { serializable, allNullable, useVar, packageName });
+    filename = rootName + '.kt';
+    out.appendChild(renderKotlin(code));
+  } else if (_convertLang === 'java') {
+    const rootName        = document.getElementById('java-root-name').value.trim() || 'Root';
+    const packageName     = document.getElementById('java-package-name').value.trim();
+    const activeAnn       = document.querySelector('#opts-java [data-ann].active');
+    const annotationStyle = activeAnn ? activeAnn.dataset.ann : 'jackson';
+    const includeGetters  = document.getElementById('jv-toggle-getters').classList.contains('active');
+    code = jsonToJava(_kotlinParsed, rootName, { packageName, annotationStyle, includeGetters });
+    filename = rootName + '.java';
+    out.appendChild(renderJava(code));
+  } else if (_convertLang === 'swift') {
+    const rootName    = document.getElementById('swift-root-name').value.trim() || 'Root';
+    const packageName = document.getElementById('swift-package-name').value.trim();
+    const useCodable  = document.getElementById('sw-toggle-codable').classList.contains('active');
+    const useClass    = document.getElementById('sw-toggle-class').classList.contains('active');
+    const useVar      = document.getElementById('sw-toggle-var').classList.contains('active');
+    code = jsonToSwift(_kotlinParsed, rootName, { useCodable, useClass, useVar, allNullable: false, packageName });
+    filename = rootName + '.swift';
+    out.appendChild(renderSwift(code));
+  } else {
+    const rootName    = document.getElementById('flutter-root-name').value.trim() || 'Root';
+    const packageName = document.getElementById('flutter-package-name').value.trim();
+    const includeJson = document.getElementById('fl-toggle-json').classList.contains('active');
+    const useFinal    = document.getElementById('fl-toggle-final').classList.contains('active');
+    const allNullable = document.getElementById('fl-toggle-nullable').classList.contains('active');
+    code = jsonToFlutter(_kotlinParsed, rootName, { includeJson, useFinal, allNullable, packageName });
+    filename = rootName + '.dart';
+    out.appendChild(renderFlutter(code));
+  }
+
+  document.getElementById('kotlin-meta').textContent = filename;
+  document.getElementById('btn-copy-kotlin').onclick = () => {
+    navigator.clipboard.writeText(code).then(() => toast('Copied!'));
+  };
+  document.getElementById('btn-download-kotlin').onclick = () => {
+    const blob = new Blob([code], { type: 'text/plain' });
+    const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: filename });
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+}
+
+function openKotlin(parsed, titleHint, fromScreen = 'screen-viewer') {
+  _kotlinParsed = parsed;
+  _kotlinTitleHint = titleHint || '';
+  _convertLang = 'kotlin';
+
+  const defaultName = titleToClassName(_kotlinTitleHint);
+  ['kotlin', 'java', 'swift', 'flutter'].forEach(l => {
+    const el = document.getElementById(`${l}-root-name`);
+    if (el) el.value = defaultName;
+  });
+
+  document.querySelectorAll('.convert-lang-btn').forEach(b => b.classList.toggle('active', b.dataset.lang === 'kotlin'));
+  ['kotlin', 'java', 'swift', 'flutter'].forEach(l => {
+    document.getElementById(`opts-${l}`).style.display = l === 'kotlin' ? '' : 'none';
+  });
+  document.getElementById('convert-screen-title').textContent = 'Kotlin';
+
+  reRenderConvert();
+  show('screen-kotlin');
+  document.getElementById('btn-back-from-kotlin').onclick = () => show(fromScreen);
+}
+
+/* ── VIEWER SEARCH ───────────────────────────────────────────────────── */
+const viewerSearch = { matches: [], current: -1 };
+
+function getSearchText(el) {
+  const raw = el.textContent;
+  if (el.classList.contains('jn-key')) return raw.slice(1, raw.length - 3); // strip `"` and `": `
+  if (el.classList.contains('jn-str')) return raw.slice(1, -1);             // strip surrounding `"`
+  return raw;
+}
+
+function expandToMatch(el) {
+  let node = el.parentElement;
+  while (node && node.id !== 'json-viewer') {
+    if (node.classList.contains('jn-children') && node.classList.contains('collapsed')) {
+      node.classList.remove('collapsed');
+      const wrap = node.parentElement;
+      const toggle = wrap.querySelector(':scope > .jn-toggle');
+      if (toggle) toggle.textContent = '▾';
+      const summary = wrap.querySelector(':scope > .jn-summary');
+      if (summary) summary.style.display = 'none';
+    }
+    node = node.parentElement;
+  }
+}
+
+function goToMatch(index) {
+  const { matches } = viewerSearch;
+  if (!matches.length) return;
+  if (viewerSearch.current >= 0) matches[viewerSearch.current].classList.remove('jn-match-active');
+  viewerSearch.current = index;
+  const el = matches[index];
+  el.classList.add('jn-match-active');
+  expandToMatch(el);
+  el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  document.getElementById('viewer-search-count').textContent = `${index + 1} / ${matches.length}`;
+}
+
+function runViewerSearch(query) {
+  document.querySelectorAll('.jn-match, .jn-match-active').forEach(el => el.classList.remove('jn-match', 'jn-match-active'));
+  viewerSearch.matches = [];
+  viewerSearch.current = -1;
+  const countEl = document.getElementById('viewer-search-count');
+  if (!query) { countEl.textContent = ''; return; }
+  const q = query.toLowerCase();
+  const matches = [];
+  document.getElementById('json-viewer').querySelectorAll('.jn-key, .jn-str, .jn-num, .jn-bool, .jn-null').forEach(el => {
+    if (getSearchText(el).toLowerCase().includes(q)) {
+      el.classList.add('jn-match');
+      matches.push(el);
+    }
+  });
+  viewerSearch.matches = matches;
+  if (!matches.length) { countEl.textContent = 'No match'; return; }
+  goToMatch(0);
+}
+
 /* ── TOAST ───────────────────────────────────────────────────────────── */
 let toastTimer;
 function toast(msg) {
@@ -355,6 +981,11 @@ function openViewer(entry, fromHistory = false) {
   const viewer = document.getElementById('json-viewer');
   viewer.innerHTML = '';
 
+  document.getElementById('viewer-search-input').value = '';
+  document.getElementById('viewer-search-count').textContent = '';
+  viewerSearch.matches = [];
+  viewerSearch.current = -1;
+
   let parsed;
   try { parsed = JSON.parse(entry.raw); } catch { viewer.textContent = entry.raw; return; }
 
@@ -375,6 +1006,9 @@ function openViewer(entry, fromHistory = false) {
   document.getElementById('btn-copy').onclick = () => {
     navigator.clipboard.writeText(JSON.stringify(parsed, null, 2)).then(() => toast('Copied!'));
   };
+
+  // kotlin
+  document.getElementById('btn-kotlin').onclick = () => openKotlin(parsed, entry.title, 'screen-viewer');
 }
 
 /* ── INIT ────────────────────────────────────────────────────────────── */
@@ -449,6 +1083,99 @@ document.addEventListener('DOMContentLoaded', () => {
 
   /* ---- Viewer screen ---- */
   document.getElementById('btn-open-history2').addEventListener('click', openHistory);
+
+  /* ---- Kotlin from input screen ---- */
+  document.getElementById('btn-to-kotlin').addEventListener('click', () => {
+    const raw = jsonInput.value.trim();
+    if (!raw) return;
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      const repaired = repairJSON(raw);
+      try { parsed = JSON.parse(repaired); } catch { errorMsg.classList.add('show'); return; }
+    }
+    errorMsg.classList.remove('show');
+    openKotlin(parsed, titleInput.value.trim() || autoTitle(parsed), 'screen-input');
+  });
+
+  document.getElementById('kotlin-root-name').addEventListener('input', reRenderConvert);
+  document.getElementById('kotlin-package-name').addEventListener('input', reRenderConvert);
+  document.querySelectorAll('#opts-kotlin .kotlin-toggle').forEach(btn => {
+    btn.addEventListener('click', () => { btn.classList.toggle('active'); reRenderConvert(); });
+  });
+
+  /* ---- Java options ---- */
+  document.getElementById('java-root-name').addEventListener('input', reRenderConvert);
+  document.getElementById('java-package-name').addEventListener('input', reRenderConvert);
+  document.querySelectorAll('[data-ann]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-ann]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      reRenderConvert();
+    });
+  });
+  document.getElementById('jv-toggle-getters').addEventListener('click', () => {
+    document.getElementById('jv-toggle-getters').classList.toggle('active');
+    reRenderConvert();
+  });
+
+  /* ---- Language tabs ---- */
+  const langLabels = { kotlin: 'Kotlin', java: 'Java', swift: 'Swift', flutter: 'Flutter' };
+  document.querySelectorAll('.convert-lang-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _convertLang = btn.dataset.lang;
+      document.querySelectorAll('.convert-lang-btn').forEach(b => b.classList.toggle('active', b === btn));
+      ['kotlin', 'java', 'swift', 'flutter'].forEach(l => {
+        document.getElementById(`opts-${l}`).style.display = l === _convertLang ? '' : 'none';
+      });
+      document.getElementById('convert-screen-title').textContent = langLabels[_convertLang] || _convertLang;
+      reRenderConvert();
+    });
+  });
+
+  /* ---- Swift options ---- */
+  document.getElementById('swift-root-name').addEventListener('input', reRenderConvert);
+  document.getElementById('swift-package-name').addEventListener('input', reRenderConvert);
+  ['sw-toggle-codable', 'sw-toggle-class', 'sw-toggle-var'].forEach(id => {
+    document.getElementById(id).addEventListener('click', () => {
+      document.getElementById(id).classList.toggle('active');
+      reRenderConvert();
+    });
+  });
+
+  /* ---- Flutter options ---- */
+  document.getElementById('flutter-root-name').addEventListener('input', reRenderConvert);
+  document.getElementById('flutter-package-name').addEventListener('input', reRenderConvert);
+  ['fl-toggle-json', 'fl-toggle-final', 'fl-toggle-nullable'].forEach(id => {
+    document.getElementById(id).addEventListener('click', () => {
+      document.getElementById(id).classList.toggle('active');
+      reRenderConvert();
+    });
+  });
+
+  /* ---- Viewer search ---- */
+  const searchInput = document.getElementById('viewer-search-input');
+  searchInput.addEventListener('input', e => runViewerSearch(e.target.value.trim()));
+  searchInput.addEventListener('keydown', e => {
+    const { matches, current } = viewerSearch;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (!matches.length) return;
+      goToMatch(e.shiftKey ? (current - 1 + matches.length) % matches.length : (current + 1) % matches.length);
+    } else if (e.key === 'Escape') {
+      searchInput.value = '';
+      runViewerSearch('');
+    }
+  });
+  document.getElementById('btn-search-prev').addEventListener('click', () => {
+    const { matches, current } = viewerSearch;
+    if (matches.length) goToMatch((current - 1 + matches.length) % matches.length);
+  });
+  document.getElementById('btn-search-next').addEventListener('click', () => {
+    const { matches, current } = viewerSearch;
+    if (matches.length) goToMatch((current + 1) % matches.length);
+  });
 
   /* ---- History screen ---- */
   document.getElementById('btn-back-from-history').addEventListener('click', () => {
