@@ -121,7 +121,7 @@ function renderTree(value) {
     children.className = 'jn-children';
 
     if (isArr) {
-      val.forEach((item, i) => build(item, i, children));
+      val.forEach(item => build(item, null, children));
     } else {
       Object.entries(val).forEach(([k, v]) => build(v, k, children));
     }
@@ -145,6 +145,43 @@ function renderTree(value) {
 
   build(value, null, container);
   return container;
+}
+
+/* ── JSON AUTO-REPAIR ────────────────────────────────────────────────── */
+function repairJSON(str) {
+  // Fix 1: remove literal newline/carriage-return characters inside strings
+  // (they are copy-paste artifacts — valid JSON requires \n escape sequences)
+  let fixed = '';
+  let inString = false;
+  let escaped = false;
+
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (escaped) { fixed += ch; escaped = false; continue; }
+    if (ch === '\\' && inString) { fixed += ch; escaped = true; continue; }
+    if (ch === '"') { inString = !inString; fixed += ch; continue; }
+    if (inString && (ch === '\n' || ch === '\r')) continue; // strip bad chars
+    fixed += ch;
+  }
+
+  // Fix 2: close any unclosed { [ brackets left by truncation
+  const stack = [];
+  inString = false;
+  escaped = false;
+
+  for (let i = 0; i < fixed.length; i++) {
+    const ch = fixed[i];
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && inString) { escaped = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === '{') stack.push('}');
+    else if (ch === '[') stack.push(']');
+    else if (ch === '}' || ch === ']') stack.pop();
+  }
+
+  while (stack.length) fixed += stack.pop();
+  return fixed;
 }
 
 /* ── TOAST ───────────────────────────────────────────────────────────── */
@@ -315,23 +352,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!raw) return;
 
     let parsed;
+    let finalRaw = raw;
+    let wasRepaired = false;
+
     try {
       parsed = JSON.parse(raw);
-      errorMsg.classList.remove('show');
     } catch {
-      errorMsg.classList.add('show');
-      return;
+      const repaired = repairJSON(raw);
+      try {
+        parsed = JSON.parse(repaired);
+        finalRaw = repaired;
+        wasRepaired = true;
+        jsonInput.value = repaired;
+      } catch {
+        errorMsg.classList.add('show');
+        return;
+      }
     }
+
+    errorMsg.classList.remove('show');
 
     const entry = {
       id: Date.now().toString(36) + Math.random().toString(36).slice(2),
       title: titleInput.value.trim() || autoTitle(parsed),
-      raw,
-      size: jsonSize(raw),
+      raw: finalRaw,
+      size: jsonSize(finalRaw),
       ts: Date.now(),
     };
 
     await dbAdd(entry);
+    if (wasRepaired) toast('Auto-repaired & formatted');
     openViewer(entry, false);
   });
 
