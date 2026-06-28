@@ -61,25 +61,73 @@ function show(id) {
 function renderTree(value) {
   const container = document.createElement('div');
 
-  function build(val, key, parent) {
+  function escapeStr(s) {
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function valMeta(val) {
+    if (val === null)             return { cls: 'jn-null', txt: 'null' };
+    if (typeof val === 'boolean') return { cls: 'jn-bool', txt: String(val) };
+    if (typeof val === 'number')  return { cls: 'jn-num',  txt: String(val) };
+    return { cls: 'jn-str', txt: `"${escapeStr(String(val))}"` };
+  }
+
+  function makeEditable(span, currentVal, setter) {
+    span.title = 'Double-click to edit';
+    span.addEventListener('dblclick', e => {
+      e.stopPropagation();
+      const raw = typeof currentVal === 'string' ? currentVal : JSON.stringify(currentVal);
+      const input = document.createElement('input');
+      input.className = 'jn-edit-input ' + span.className;
+      input.value = raw;
+      input.style.width = Math.max(raw.length + 1, 3) + 'ch';
+      span.replaceWith(input);
+      input.focus();
+      input.select();
+
+      let done = false;
+
+      function commit() {
+        if (done) return; done = true;
+        const v = input.value;
+        let newVal;
+        try { newVal = JSON.parse(v); } catch { newVal = v; }
+        setter(newVal);
+        const { cls, txt } = valMeta(newVal);
+        const newSpan = Object.assign(document.createElement('span'), { className: cls, textContent: txt });
+        makeEditable(newSpan, newVal, setter);
+        input.replaceWith(newSpan);
+      }
+
+      function cancel() {
+        if (done) return; done = true;
+        input.replaceWith(span);
+      }
+
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', ev => {
+        if (ev.key === 'Enter')  { ev.preventDefault(); input.blur(); }
+        if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+      });
+      input.addEventListener('input', () => {
+        input.style.width = Math.max(input.value.length + 1, 3) + 'ch';
+      });
+    });
+  }
+
+  function build(val, key, parent, setter) {
     const wrap = document.createElement('div');
 
     const keySpan = key !== null
       ? Object.assign(document.createElement('span'), { className: 'jn-key', textContent: `"${key}": ` })
       : null;
 
-    if (val === null) {
+    if (val === null || typeof val === 'boolean' || typeof val === 'number' || typeof val === 'string') {
       if (keySpan) wrap.appendChild(keySpan);
-      wrap.appendChild(Object.assign(document.createElement('span'), { className: 'jn-null', textContent: 'null' }));
-    } else if (typeof val === 'boolean') {
-      if (keySpan) wrap.appendChild(keySpan);
-      wrap.appendChild(Object.assign(document.createElement('span'), { className: 'jn-bool', textContent: String(val) }));
-    } else if (typeof val === 'number') {
-      if (keySpan) wrap.appendChild(keySpan);
-      wrap.appendChild(Object.assign(document.createElement('span'), { className: 'jn-num', textContent: String(val) }));
-    } else if (typeof val === 'string') {
-      if (keySpan) wrap.appendChild(keySpan);
-      wrap.appendChild(Object.assign(document.createElement('span'), { className: 'jn-str', textContent: `"${escapeStr(val)}"` }));
+      const { cls, txt } = valMeta(val);
+      const valueSpan = Object.assign(document.createElement('span'), { className: cls, textContent: txt });
+      if (setter) makeEditable(valueSpan, val, setter);
+      wrap.appendChild(valueSpan);
     } else if (Array.isArray(val)) {
       buildCollection(val, key, wrap, '[', ']', true);
     } else if (typeof val === 'object') {
@@ -94,7 +142,6 @@ function renderTree(value) {
     const count = entries.length;
     const isEmpty = count === 0;
 
-    // toggle arrow
     const toggle = Object.assign(document.createElement('span'), {
       className: 'jn-toggle',
       textContent: '▾',
@@ -121,9 +168,9 @@ function renderTree(value) {
     children.className = 'jn-children';
 
     if (isArr) {
-      val.forEach(item => build(item, null, children));
+      val.forEach((item, i) => build(item, null, children, newVal => { val[i] = newVal; }));
     } else {
-      Object.entries(val).forEach(([k, v]) => build(v, k, children));
+      Object.entries(val).forEach(([k, v]) => build(v, k, children, newVal => { val[k] = newVal; }));
     }
 
     wrap.appendChild(children);
@@ -139,11 +186,7 @@ function renderTree(value) {
     }
   }
 
-  function escapeStr(s) {
-    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  }
-
-  build(value, null, container);
+  build(value, null, container, null);
   return container;
 }
 

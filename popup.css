@@ -176,6 +176,18 @@ button { cursor: pointer; border: none; font-family: inherit; font-size: 12px; }
 .jn-children.collapsed { display: none; }
 .jn-summary { color: var(--muted); font-style: italic; }
 
+.jn-edit-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid currentColor;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  outline: none;
+  min-width: 3ch;
+  vertical-align: baseline;
+}
+
 /* ── HISTORY SCREEN ── */
 .history-toolbar {
   display: flex; flex-direction: column; gap: 8px;
